@@ -1,0 +1,184 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Etherlight Pi</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 20px; max-width: 900px; }
+    h1 { margin-bottom: 0.2rem; }
+    .row { display: flex; gap: 16px; flex-wrap: wrap; }
+    .card { border: 1px solid #ddd; border-radius: 12px; padding: 12px 16px; }
+    label { display:block; font-size: 0.9rem; margin-top: 8px; }
+    input[type=text], input[type=number] { width: 240px; padding: 6px 8px; }
+    table { border-collapse: collapse; width: 100%; }
+    th, td { border-bottom: 1px solid #eee; padding: 8px; text-align: left; }
+    .pill { padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; }
+    .ok { background:#e8f5e9; color:#2e7d32 }
+    .bad{ background:#ffebee; color:#c62828 }
+    .btn { padding: 8px 12px; border: 1px solid #444; border-radius: 10px; background: #fff; cursor: pointer; }
+    .btn:active { transform: translateY(1px); }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+  </style>
+</head>
+<body>
+  <h1>Etherlight Pi</h1>
+  <p>Two LEDs per port: <b>VLAN</b> (left) and <b>Link/Speed</b> (right). Link LED blinks when up at ≥100&nbsp;Mb/s.</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Device</h3>
+      <label>Switch Host/IP <input id="switch_host" type="text"></label>
+      <label>SNMP Community <input id="snmp_comm" type="text"></label>
+      <label>Ports (count) <input id="ports_count" type="number" min="1" max="64"></label>
+      <label>LEDs per port <input id="leds_per_port" type="number" min="1" max="2"></label>
+      <label>LED Brightness <input id="led_bright" type="number" min="1" max="255"></label>
+      <label>Polling Interval (sec) <input id="poll_sec" type="number" min="1" max="60"></label>
+      <div style="margin-top:8px;">
+        <button class="btn" onclick="saveConfig()">Save</button>
+        <button class="btn" onclick="identify()">Identify LEDs</button>
+      </div>
+    </div>
+    <div class="card" style="flex:1;">
+      <h3>Live Ports</h3>
+      <table>
+        <thead><tr><th>Port</th><th>VLAN</th><th>Speed</th><th>Link</th><th>Test</th></tr></thead>
+        <tbody id="state_rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>VLAN → Color</h3>
+    <table>
+      <thead><tr><th>VLAN</th><th>Color</th><th></th></tr></thead>
+      <tbody id="vlan_rows"></tbody>
+    </table>
+    <div class="row" style="margin-top:8px;">
+      <input id="new_vlan" type="number" placeholder="VLAN ID">
+      <input id="new_color" type="color" value="#00ff00">
+      <button class="btn" onclick="addVlan()">Add/Update</button>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>Link/Speed Colors</h3>
+    <div class="grid" id="link_colors"></div>
+  </div>
+
+  <script>
+    let CFG = null;
+    async function loadConfig() {
+      const r = await fetch('/api/config'); CFG = await r.json();
+      document.getElementById('switch_host').value = CFG.device.switch_host;
+      document.getElementById('snmp_comm').value = CFG.device.snmp.community;
+      document.getElementById('ports_count').value = CFG.device.ports.count;
+      document.getElementById('leds_per_port').value = CFG.device.leds_per_port || 2;
+      document.getElementById('led_bright').value = CFG.led.brightness;
+      document.getElementById('poll_sec').value = CFG.polling.interval_sec;
+
+      renderVlanTable();
+      renderLinkColors();
+    }
+
+    function renderVlanTable() {
+      const body = document.getElementById('vlan_rows');
+      body.innerHTML = '';
+      const entries = Object.entries(CFG.vlan_colors || {})
+        .sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+      for (const [vid, col] of entries) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${vid}</td>
+          <td><span style="display:inline-block;width:28px;height:16px;background:${col};border:1px solid #ccc"></span> ${col}</td>
+          <td><button class="btn" onclick="delVlan('${vid}')">Delete</button></td>`;
+        body.appendChild(tr);
+      }
+    }
+
+    function renderLinkColors() {
+      const grid = document.getElementById('link_colors');
+      grid.innerHTML = '';
+      for (const key of Object.keys(CFG.link_colors)) {
+        const wrap = document.createElement('div');
+        wrap.innerHTML = `
+          <label>${key.toUpperCase()}</label>
+          <input type="color" value="${CFG.link_colors[key]}" onchange="setLinkColor('${key}', this.value)">
+        `;
+        grid.appendChild(wrap);
+      }
+    }
+
+    async function saveConfig() {
+      CFG.device.switch_host = document.getElementById('switch_host').value;
+      CFG.device.snmp.community = document.getElementById('snmp_comm').value;
+      CFG.device.ports.count = parseInt(document.getElementById('ports_count').value);
+      CFG.device.leds_per_port = parseInt(document.getElementById('leds_per_port').value);
+      CFG.led.brightness = parseInt(document.getElementById('led_bright').value);
+      CFG.polling.interval_sec = parseInt(document.getElementById('poll_sec').value);
+      await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(CFG)});
+      alert('Saved. The renderer will pick up changes automatically.');
+    }
+
+    function addVlan() {
+      const v = document.getElementById('new_vlan').value;
+      const c = document.getElementById('new_color').value;
+      if (!v) return;
+      CFG.vlan_colors[String(parseInt(v))] = c;
+      renderVlanTable();
+      document.getElementById('new_vlan').value='';
+    }
+    function delVlan(v) {
+      delete CFG.vlan_colors[v];
+      renderVlanTable();
+    }
+    function setLinkColor(k, v) {
+      CFG.link_colors[k] = v;
+    }
+
+    async function identify() {
+      await fetch('/api/identify', {method:'POST'});
+    }
+
+    async function loadState() {
+      const r = await fetch('/api/state'); const st = await r.json();
+      const body = document.getElementById('state_rows');
+      body.innerHTML = '';
+      const ports = parseInt(CFG.device.ports.count);
+      for (let p=1; p<=ports; p++) {
+        const s = st[p] || {};
+        const up = !!s.up;
+        const vlan = s.vlan ?? '—';
+        const spd = s.speed ? s.speed + ' Mb' : '—';
+        const pill = up ? '<span class="pill ok">up</span>' : '<span class="pill bad">down</span>';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${p}</td>
+          <td>${vlan}</td>
+          <td>${spd}</td>
+          <td>${pill}</td>
+          <td><button class="btn" onclick="testPort(${p})">Blink</button></td>
+        `;
+        body.appendChild(tr);
+      }
+    }
+
+    async function testPort(p) {
+      await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({port:p, slot:0, color:'#FFFFFF'})});
+      await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({port:p, slot:1, color:'#FFFFFF'})});
+      setTimeout(async ()=>{
+        await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({port:p, slot:0, color:'#000000'})});
+        await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({port:p, slot:1, color:'#000000'})});
+      }, 500);
+    }
+
+    loadConfig();
+    loadState();
+    setInterval(loadState, 2000);
+  </script>
+</body>
+</html>

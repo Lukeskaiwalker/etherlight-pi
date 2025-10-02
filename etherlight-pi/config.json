@@ -1,0 +1,51 @@
+{
+  "device": {
+    "switch_host": "10.0.10.12",
+    "snmp": {
+      "version": "v2c",
+      "community": "public"
+    },
+    "identify_by": {
+      "sysName": ""
+    },
+    "ports": {
+      "count": 16,
+      "map": {}
+    },
+    "leds_per_port": 2
+  },
+  "led": {
+    "pin": 18,
+    "brightness": 40
+  },
+  "polling": {
+    "interval_sec": 5,
+    "scan_subnet": ""
+  },
+  "vlan_colors": {
+    "1": "#202020",
+    "10": "#0077FF",
+    "20": "#00E676",
+    "30": "#FFC400",
+    "40": "#FF3B30"
+  },
+  "link_colors": {
+    "down": "#000000",
+    "10": "#A0A0A0",
+    "100": "#FFA500",
+    "1000": "#00C853",
+    "2500": "#00FFFF",
+    "10000": "#2979FF"
+  },
+  "blink": {
+    "period_ms": 1000,
+    "duty": 0.5
+  },
+  "sync": {
+    "mode": "none",
+    "mqtt": {
+      "host": "mqtt.local",
+      "topic": "etherlight/config/global"
+    }
+  }
+}

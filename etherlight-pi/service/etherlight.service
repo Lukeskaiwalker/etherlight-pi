@@ -1,0 +1,13 @@
+[Unit]
+Description=Etherlight Pi (SNMP -> LEDs)
+After=network-online.target
+
+[Service]
+User=pi
+WorkingDirectory=/home/pi/etherlight-pi
+ExecStart=/usr/bin/python3 /home/pi/etherlight-pi/app.py
+Restart=always
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
