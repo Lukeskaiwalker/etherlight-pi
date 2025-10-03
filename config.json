@@ -1,0 +1,75 @@
+{
+  "device": {
+    "switch_host": "192.168.1.100",
+    "snmp": {
+      "version": "v2c",
+      "community": "public"
+    },
+    "model_hint": "",
+    "ports": {
+      "count": 16,
+      "map": {}
+    },
+    "leds_per_port": 2
+  },
+  "led": {
+    "pin": 18,
+    "brightness": 64,
+    "type": "ws2812b",
+    "color_order": "GRB"
+  },
+  "display": {
+    "enabled": false,
+    "driver": "ssd1351",
+    "width": 128,
+    "height": 128,
+    "spi_port": 0,
+    "spi_device": 0,
+    "gpio_dc": 24,
+    "gpio_rst": 25,
+    "gpio_cs": 8,
+    "rotate_deg": 0,
+    "splash_ms": 1500
+  },
+  "sensors": {
+    "bmp280": {
+      "enabled": true,
+      "bus": 1,
+      "address": "0x76"
+    }
+  },
+  "ui": {
+    "dark_mode": true
+  },
+  "polling": {
+    "interval_sec": 5
+  },
+  "vlan_colors": {
+    "1": "#202020",
+    "10": "#0077FF",
+    "20": "#00E676",
+    "30": "#FFC400",
+    "40": "#FF3B30"
+  },
+  "link_colors": {
+    "down": "#000000",
+    "10": "#A0A0A0",
+    "100": "#FFA500",
+    "1000": "#00C853",
+    "2500": "#00FFFF",
+    "10000": "#2979FF"
+  },
+  "blink": {
+    "period_ms": 1000,
+    "duty": 0.5
+  },
+  "sync": {
+    "mode": "off",
+    "multicast": "239.0.0.57",
+    "port": 49692
+  },
+  "identify": {
+    "mode": "leds",
+    "duration_ms": 800
+  }
+}
