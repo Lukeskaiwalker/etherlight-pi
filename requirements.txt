@@ -1,0 +1,8 @@
+Flask==3.0.0
+pysnmp>=7
+pyasn1
+pyasn1-modules
+rpi-ws281x==4.3.4; platform_system == "Linux"
+luma-oled>=3.13.0
+luma-lcd>=2.11.0
+Pillow>=9.5.0
