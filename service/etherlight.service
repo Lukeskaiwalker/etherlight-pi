@@ -3,7 +3,7 @@ Description=EtherPi (SNMP -> LEDs + Sync + Display)
 After=network-online.target
 
 [Service]
-User=pi
+User=root
 WorkingDirectory=/home/pi/etherlight-pi
 ExecStart=/usr/bin/python3 /home/pi/etherlight-pi/app.py
 Restart=always
