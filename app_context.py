@@ -3,6 +3,11 @@ class AppContext:
     _inst = None
     _lock = threading.Lock()
     def __init__(self, cfg_path, poller=None, temp_monitor=None):
+import threading, json, os
+class AppContext:
+    _inst = None
+    _lock = threading.Lock()
+    def __init__(self, cfg_path, poller=None):
         self.cfg_path = cfg_path
         self._cfg_lock = threading.Lock()
         self._cfg = self._load_cfg()
@@ -12,6 +17,10 @@ class AppContext:
     def init(cls, cfg_path, poller=None, temp_monitor=None):
         with cls._lock:
             cls._inst = AppContext(cfg_path, poller, temp_monitor); return cls._inst
+    @classmethod
+    def init(cls, cfg_path, poller=None):
+        with cls._lock:
+            cls._inst = AppContext(cfg_path, poller); return cls._inst
     @classmethod
     def current(cls): return cls._inst
     def _load_cfg(self):

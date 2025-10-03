@@ -68,6 +68,14 @@ class SmallDisplay:
                     draw.text((4,4), "EtherPi", fill="white")
                     draw.text((4,24), f"Switch {cfg.get('device',{}).get('switch_host','?')}", fill="white")
                 elif page == 1:
+                from app_context import AppContext
+                ctx = AppContext.current()
+                st = ctx.get_state_snapshot()
+                cfg = ctx.get_cfg_snapshot()
+                if idx == 0:
+                    draw.text((4,4), "EtherPi", fill="white")
+                    draw.text((4,24), f"Switch {cfg.get('device',{}).get('switch_host','?')}", fill="white")
+                elif idx == 1:
                     up = sum(1 for s in st.values() if s.get('up'))
                     total = cfg.get('device',{}).get('ports',{}).get('count',0)
                     draw.text((4,4), "Links", fill="white")
@@ -82,6 +90,7 @@ class SmallDisplay:
                     draw.text((4,4), "Sync", fill="white")
                     draw.text((4,24), f"Role: {role}", fill="white")
             idx += 1
+            idx = (idx + 1) % 3
             self._stop.wait(2.0)
 
     @staticmethod

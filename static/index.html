@@ -27,6 +27,15 @@
 <body>
   <div class="logo">EtherPi</div>
   <p style="color:var(--muted)">VLAN color + Link/Speed LEDs for UniFi switches. Sync across Pis. Optional small display. + Temps</p>
+    .btn { padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:var(--btn); cursor:pointer; color:var(--text); }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .swatch { display:inline-block;width:28px;height:16px;border:1px solid #333; vertical-align:middle; }
+    .row-controls { display:flex; gap:8px; flex-wrap: wrap; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h1>EtherPi</h1>
+  <p style="color:var(--muted)">VLAN color + Link/Speed LEDs for UniFi. Sync across Pis. Optional display.</p>
 
   <div class="row">
     <div class="card">
@@ -180,6 +189,7 @@
     loadConfig(); loadState(); loadTemps();
     setInterval(loadState, 2000);
     setInterval(loadTemps, 2000);
+    loadConfig(); loadState(); setInterval(loadState, 2000);
   </script>
 </body>
 </html>

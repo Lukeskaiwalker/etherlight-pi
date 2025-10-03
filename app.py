@@ -25,6 +25,9 @@ disp = SmallDisplay(cfg.get('display', {}))
 if cfg.get('display',{}).get('enabled', False): disp.start()
 
 # LEDs
+disp = SmallDisplay(cfg.get('display', {}))
+if cfg.get('display',{}).get('enabled', False): disp.start()
+
 port_count = cfg['device']['ports']['count']
 leds_per_port = cfg['device'].get('leds_per_port', 2)
 strip = LedStrip(port_count, leds_per_port,
@@ -43,6 +46,7 @@ poller.start()
 
 # Context + sync
 ctx = AppContext.init(CONFIG_PATH, poller=poller, temp_monitor=tempmon)
+ctx = AppContext.init(CONFIG_PATH, poller=poller)
 syncer = UdpSync(lambda: ctx.get_cfg_snapshot()); syncer.start()
 
 def choose_link_color(speed_mbps, up, link_colors):
@@ -106,6 +110,15 @@ def api_identify():
     strip.show(); import time as _t; _t.sleep(0.8)
     for k in range(strip.total): strip._set_rgb(k, (0,0,0))
     strip.show()
+    mode = ctx.get_cfg_snapshot().get('identify',{}).get('mode','leds')
+    if mode in ('leds','both'):
+        for k in range(strip.total): strip._set_rgb(k, (255,255,255))
+        strip.show(); time.sleep(ctx.get_cfg_snapshot().get('identify',{}).get('duration_ms',800)/1000.0)
+        for k in range(strip.total): strip._set_rgb(k, (0,0,0))
+        strip.show()
+    if mode in ('screen','both'):
+        try: from display import SmallDisplay; pass
+        except Exception: pass
     return jsonify({'ok': True})
 
 @app.route('/api/detect_switch', methods=['POST'])
