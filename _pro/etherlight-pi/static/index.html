@@ -1,0 +1,168 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>EtherPi</title>
+  <style>
+    :root { color-scheme: light dark;
+      --bg:#0b0f14; --card:#111821; --text:#e6edf3; --muted:#9fb2c3; --line:#1f2a36; --btn:#182433; }
+    body { font-family: system-ui, sans-serif; margin: 20px; max-width: 980px; background:var(--bg); color:var(--text); }
+    .row { display:flex; gap:16px; flex-wrap:wrap; }
+    .card { border:1px solid var(--line); border-radius:12px; padding:12px 16px; background:var(--card); }
+    label { display:block; font-size:0.9rem; margin-top:8px; color:var(--muted); }
+    input[type=text], input[type=number], select { width:260px; padding:8px 10px; background:#0a0f14; color:var(--text); border:1px solid var(--line); border-radius:8px; }
+    table { border-collapse:collapse; width:100%; }
+    th, td { border-bottom:1px solid var(--line); padding:8px; text-align:left; color:var(--text); }
+    .pill { padding:2px 8px; border-radius:999px; font-size:0.8rem; }
+    .ok { background:#10351c; color:#52d273 } .bad { background:#3a1216; color:#ff7373 }
+    .btn { padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:var(--btn); cursor:pointer; color:var(--text); }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .swatch { display:inline-block;width:28px;height:16px;border:1px solid #333; vertical-align:middle; }
+    .row-controls { display:flex; gap:8px; flex-wrap: wrap; margin-top:8px; }
+  </style>
+</head>
+<body>
+  <h1>EtherPi</h1>
+  <p style="color:var(--muted)">VLAN color + Link/Speed LEDs for UniFi. Sync across Pis. Optional display.</p>
+
+  <div class="row">
+    <div class="card">
+      <h3>Device</h3>
+      <label>Switch Host/IP <input id="switch_host" type="text"></label>
+      <label>SNMP Community <input id="snmp_comm" type="text"></label>
+      <label>Ports (count) <input id="ports_count" type="number" min="1" max="64"></label>
+      <div class="row-controls">
+        <button class="btn" onclick="detectSwitch()">Detect switch</button>
+        <button class="btn" onclick="saveConfig()">Save</button>
+        <button class="btn" onclick="identify()">Identify</button>
+      </div>
+      <div style="margin-top:8px; color:var(--muted)" id="model_hint"></div>
+    </div>
+
+    <div class="card">
+      <h3>LEDs</h3>
+      <label>LEDs per port <input id="leds_per_port" type="number" min="1" max="2"></label>
+      <label>Brightness <input id="led_bright" type="number" min="1" max="255"></label>
+      <label>Type
+        <select id="led_type">
+          <option>ws2812b</option><option>ws2812</option><option>ws2811</option>
+          <option>sk6812</option><option>sk6812w</option>
+        </select>
+      </label>
+      <label>Color order
+        <select id="led_order">
+          <option>GRB</option><option>RGB</option><option>RBG</option><option>GBR</option><option>BRG</option><option>BGR</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="card">
+      <h3>Sync</h3>
+      <label>Mode
+        <select id="sync_mode"><option>off</option><option>master</option><option>slave</option></select>
+      </label>
+    </div>
+  </div>
+
+  <div class="row">
+    <div class="card" style="flex:1;">
+      <h3>Live Ports</h3>
+      <table>
+        <thead><tr><th>Port</th><th>ifName</th><th>VLAN</th><th>Speed</th><th>Link</th><th>Test</th></tr></thead>
+        <tbody id="state_rows"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:16px;">
+    <h3>VLAN → Color</h3>
+    <table>
+      <thead><tr><th>VLAN</th><th>Color</th><th></th></tr></thead>
+      <tbody id="vlan_rows"></tbody>
+    </table>
+    <div class="row-controls">
+      <input id="new_vlan" type="number" placeholder="VLAN ID">
+      <input id="new_color" type="color" value="#00ff00">
+      <button class="btn" onclick="addVlan()">Add/Update</button>
+    </div>
+  </div>
+
+  <script>
+    let CFG = null;
+    async function loadConfig() {
+      const r = await fetch('/api/config'); CFG = await r.json();
+      document.getElementById('switch_host').value = CFG.device.switch_host;
+      document.getElementById('snmp_comm').value = CFG.device.snmp.community;
+      document.getElementById('ports_count').value = CFG.device.ports.count;
+      document.getElementById('leds_per_port').value = CFG.device.leds_per_port || 2;
+      document.getElementById('led_bright').value = CFG.led.brightness;
+      document.getElementById('led_type').value = CFG.led.type || 'ws2812b';
+      document.getElementById('led_order').value = CFG.led.color_order || 'GRB';
+      document.getElementById('sync_mode').value = CFG.sync.mode || 'off';
+      document.getElementById('model_hint').innerText = CFG.device.model_hint || '';
+      renderVlanTable();
+    }
+
+    async function saveConfig() {
+      CFG.device.switch_host = document.getElementById('switch_host').value;
+      CFG.device.snmp.community = document.getElementById('snmp_comm').value;
+      CFG.device.ports.count = parseInt(document.getElementById('ports_count').value);
+      CFG.device.leds_per_port = parseInt(document.getElementById('leds_per_port').value);
+      CFG.led.brightness = parseInt(document.getElementById('led_bright').value);
+      CFG.led.type = document.getElementById('led_type').value;
+      CFG.led.color_order = document.getElementById('led_order').value;
+      CFG.sync.mode = document.getElementById('sync_mode').value;
+      await fetch('/api/config', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(CFG)});
+      alert('Saved.');
+    }
+
+    function renderVlanTable() {
+      const body = document.getElementById('vlan_rows'); body.innerHTML = '';
+      const entries = Object.entries(CFG.vlan_colors || {}).sort((a,b)=>parseInt(a[0])-parseInt(b[0]));
+      for (const [vid, col] of entries) {
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${vid}</td><td><span class="swatch" style="background:${col}"></span> ${col}</td>
+                        <td><button class="btn" onclick="delVlan('${vid}')">Delete</button></td>`;
+        body.appendChild(tr);
+      }
+    }
+    function addVlan(){ const v=document.getElementById('new_vlan').value; const c=document.getElementById('new_color').value;
+      if(!v) return; CFG.vlan_colors[String(parseInt(v))]=c; renderVlanTable(); document.getElementById('new_vlan').value=''; }
+    function delVlan(v){ delete CFG.vlan_colors[v]; renderVlanTable(); }
+
+    async function identify(){ await fetch('/api/identify', {method:'POST'}); }
+
+    async function detectSwitch(){
+      const r = await fetch('/api/detect_switch', {method:'POST'});
+      const j = await r.json();
+      if (j.ok) {
+        document.getElementById('model_hint').innerText = `${j.model} | ports: ${j.ports}`;
+        document.getElementById('ports_count').value = j.ports;
+        alert('Detected: ' + j.model + ' | ports: ' + j.ports);
+      } else { alert('Detect failed: ' + (j.error || 'unknown')); }
+    }
+
+    async function loadState(){
+      const r = await fetch('/api/state'); const st = await r.json();
+      const body = document.getElementById('state_rows'); body.innerHTML = '';
+      const ports = parseInt(CFG.device.ports.count);
+      for(let p=1;p<=ports;p++){
+        const s = st[p]||{}; const up=!!s.up; const vlan = s.vlan ?? '—'; const spd = s.speed ? s.speed+' Mb' : '—';
+        const pill = up ? '<span class="pill ok">up</span>' : '<span class="pill bad">down</span>';
+        const tr = document.createElement('tr');
+        tr.innerHTML = `<td>${p}</td><td>${s.ifName||'—'}</td><td>${vlan}</td><td>${spd}</td><td>${pill}</td>
+                        <td><button class="btn" onclick="testPort(${p})">Blink</button></td>`;
+        body.appendChild(tr);
+      }
+    }
+    async function testPort(p){
+      await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({port:p,slot:0,color:'#FFFFFF'})});
+      await fetch('/api/test/set', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({port:p,slot:1,color:'#FFFFFF'})});
+      setTimeout(async()=>{ await fetch('/api/test/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({port:p,slot:0,color:'#000000'})});
+                            await fetch('/api/test/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({port:p,slot:1,color:'#000000'})}); }, 500);
+    }
+    loadConfig(); loadState(); setInterval(loadState, 2000);
+  </script>
+</body>
+</html>
