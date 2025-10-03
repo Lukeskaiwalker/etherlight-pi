@@ -31,6 +31,13 @@
     "rotate_deg": 0,
     "splash_ms": 1500
   },
+  "sensors": {
+    "bmp280": {
+      "enabled": true,
+      "bus": 1,
+      "address": "0x76"
+    }
+  },
   "ui": {
     "dark_mode": true
   },

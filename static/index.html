@@ -8,6 +8,7 @@
     :root { color-scheme: light dark;
       --bg:#0b0f14; --card:#111821; --text:#e6edf3; --muted:#9fb2c3; --line:#1f2a36; --btn:#182433; }
     body { font-family: system-ui, sans-serif; margin: 20px; max-width: 980px; background:var(--bg); color:var(--text); }
+    h1 { margin-bottom: 0.2rem; }
     .row { display:flex; gap:16px; flex-wrap:wrap; }
     .card { border:1px solid var(--line); border-radius:12px; padding:12px 16px; background:var(--card); }
     label { display:block; font-size:0.9rem; margin-top:8px; color:var(--muted); }
@@ -16,6 +17,16 @@
     th, td { border-bottom:1px solid var(--line); padding:8px; text-align:left; color:var(--text); }
     .pill { padding:2px 8px; border-radius:999px; font-size:0.8rem; }
     .ok { background:#10351c; color:#52d273 } .bad { background:#3a1216; color:#ff7373 }
+    .btn { padding:8px 12px; border:1px solid var(--line); border-radius:10px; background: var(--btn); cursor:pointer; color:var(--text); }
+    .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
+    .swatch { display:inline-block;width:28px;height:16px;border:1px solid #333; vertical-align:middle; }
+    .row-controls { display:flex; gap:8px; flex-wrap: wrap; margin-top:8px; }
+    .logo { font-weight:800; font-size:28px; letter-spacing:0.5px; background: linear-gradient(90deg,#ff5f6d,#ffc371,#47cf73,#2ea8ff,#bd34fe); -webkit-background-clip:text; background-clip:text; color:transparent; }
+  </style>
+</head>
+<body>
+  <div class="logo">EtherPi</div>
+  <p style="color:var(--muted)">VLAN color + Link/Speed LEDs for UniFi switches. Sync across Pis. Optional small display. + Temps</p>
     .btn { padding:8px 12px; border:1px solid var(--line); border-radius:10px; background:var(--btn); cursor:pointer; color:var(--text); }
     .grid { display:grid; grid-template-columns: repeat(auto-fit,minmax(180px,1fr)); gap:12px; }
     .swatch { display:inline-block;width:28px;height:16px;border:1px solid #333; vertical-align:middle; }
@@ -62,6 +73,12 @@
       <label>Mode
         <select id="sync_mode"><option>off</option><option>master</option><option>slave</option></select>
       </label>
+    </div>
+
+    <div class="card">
+      <h3>Temperatures</h3>
+      <div>CPU: <span id="t_cpu">--</span> °C</div>
+      <div>BMP280: <span id="t_bmp">--</span> °C</div>
     </div>
   </div>
 
@@ -162,6 +179,16 @@
       setTimeout(async()=>{ await fetch('/api/test/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({port:p,slot:0,color:'#000000'})});
                             await fetch('/api/test/set',{method:'POST',headers:{'Content-Type':'application/json'},body: JSON.stringify({port:p,slot:1,color:'#000000'})}); }, 500);
     }
+
+    async function loadTemps(){
+      const r = await fetch('/api/temps'); const t = await r.json();
+      document.getElementById('t_cpu').innerText = (t.cpu_c!=null) ? t.cpu_c.toFixed(1) : '--';
+      document.getElementById('t_bmp').innerText = (t.bmp280_c!=null) ? t.bmp280_c.toFixed(1) : '--';
+    }
+
+    loadConfig(); loadState(); loadTemps();
+    setInterval(loadState, 2000);
+    setInterval(loadTemps, 2000);
     loadConfig(); loadState(); setInterval(loadState, 2000);
   </script>
 </body>

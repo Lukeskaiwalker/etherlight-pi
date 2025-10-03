@@ -6,3 +6,5 @@ rpi-ws281x==4.3.4; platform_system == "Linux"
 luma-oled>=3.13.0
 luma-lcd>=2.11.0
 Pillow>=9.5.0
+smbus2>=0.4.3
+bmp280>=0.4.2

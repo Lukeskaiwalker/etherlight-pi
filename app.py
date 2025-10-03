@@ -5,6 +5,7 @@ from snmp_poller import SnmpPoller
 from udp_sync import UdpSync
 from display import SmallDisplay
 from app_context import AppContext
+from temps import TempMonitor
 
 CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
 def load_config():
@@ -16,6 +17,14 @@ app = Flask(__name__, static_folder='static', static_url_path='/static')
 cfg = load_config()
 stop_event = threading.Event()
 
+# Temps monitor
+tempmon = TempMonitor(cfg); tempmon.start()
+
+# Optional display
+disp = SmallDisplay(cfg.get('display', {}))
+if cfg.get('display',{}).get('enabled', False): disp.start()
+
+# LEDs
 disp = SmallDisplay(cfg.get('display', {}))
 if cfg.get('display',{}).get('enabled', False): disp.start()
 
@@ -28,12 +37,15 @@ strip = LedStrip(port_count, leds_per_port,
 try: strip.rainbow_cycle(duration_sec=1.2)
 except Exception: pass
 
+# SNMP poller
 poller = SnmpPoller(host=cfg['device']['switch_host'],
                     community=cfg['device']['snmp']['community'],
                     interval_sec=cfg['polling']['interval_sec'],
                     port_count=port_count, stop_event=stop_event)
 poller.start()
 
+# Context + sync
+ctx = AppContext.init(CONFIG_PATH, poller=poller, temp_monitor=tempmon)
 ctx = AppContext.init(CONFIG_PATH, poller=poller)
 syncer = UdpSync(lambda: ctx.get_cfg_snapshot()); syncer.start()
 
@@ -84,6 +96,9 @@ def api_config():
 @app.route('/api/state', methods=['GET'])
 def api_state(): return jsonify(poller.get_state())
 
+@app.route('/api/temps', methods=['GET'])
+def api_temps(): return jsonify(tempmon.get_snapshot())
+
 @app.route('/api/test/set', methods=['POST'])
 def api_test_set():
     data = request.get_json(force=True); port = int(data.get('port',1)); slot=int(data.get('slot',0)); color=data.get('color','#FFFFFF')
@@ -91,6 +106,10 @@ def api_test_set():
 
 @app.route('/api/identify', methods=['POST'])
 def api_identify():
+    for k in range(strip.total): strip._set_rgb(k, (255,255,255))
+    strip.show(); import time as _t; _t.sleep(0.8)
+    for k in range(strip.total): strip._set_rgb(k, (0,0,0))
+    strip.show()
     mode = ctx.get_cfg_snapshot().get('identify',{}).get('mode','leds')
     if mode in ('leds','both'):
         for k in range(strip.total): strip._set_rgb(k, (255,255,255))

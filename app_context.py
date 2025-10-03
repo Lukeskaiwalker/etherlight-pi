@@ -1,3 +1,8 @@
+import threading, json
+class AppContext:
+    _inst = None
+    _lock = threading.Lock()
+    def __init__(self, cfg_path, poller=None, temp_monitor=None):
 import threading, json, os
 class AppContext:
     _inst = None
@@ -7,6 +12,11 @@ class AppContext:
         self._cfg_lock = threading.Lock()
         self._cfg = self._load_cfg()
         self._poller = poller
+        self._temp_monitor = temp_monitor
+    @classmethod
+    def init(cls, cfg_path, poller=None, temp_monitor=None):
+        with cls._lock:
+            cls._inst = AppContext(cfg_path, poller, temp_monitor); return cls._inst
     @classmethod
     def init(cls, cfg_path, poller=None):
         with cls._lock:
@@ -27,3 +37,6 @@ class AppContext:
     def get_state_snapshot(self):
         if not self._poller: return {}
         return self._poller.get_state()
+    def get_temp_snapshot(self):
+        if not self._temp_monitor: return {}
+        return self._temp_monitor.get_snapshot()

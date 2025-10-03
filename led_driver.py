@@ -18,6 +18,16 @@ def _strip_type(type_name:str, order:str):
     if not _HAS_WS:
         return None
     if type_name in ('ws2812','ws2812b','ws2811','sk6812'):
+        order_map = {
+            'RGB': ws.WS2811_STRIP_RGB,
+            'RBG': ws.WS2811_STRIP_RBG,
+            'GRB': ws.WS2811_STRIP_GRB,
+            'GBR': ws.WS2811_STRIP_GBR,
+            'BRG': ws.WS2811_STRIP_BRG,
+            'BGR': ws.WS2811_STRIP_BGR,
+        }
+        return order_map.get(order, ws.WS2811_STRIP_GRB)
+    if type_name in ('sk6812w','sk6812rgbw','sk6812_rgbw','sk6812w-rgbw'):
         om = {
             'RGB': ws.WS2811_STRIP_RGB,'RBG': ws.WS2811_STRIP_RBG,'GRB': ws.WS2811_STRIP_GRB,
             'GBR': ws.WS2811_STRIP_GBR,'BRG': ws.WS2811_STRIP_BRG,'BGR': ws.WS2811_STRIP_BGR,
@@ -81,6 +91,7 @@ class LedStrip:
 
     def show(self): self.strip.show()
 
+    
     def rainbow_cycle(self, duration_sec=2.0):
         if self.total <= 0: return
         steps = max(1, int(duration_sec / 0.02))
@@ -93,6 +104,9 @@ class LedStrip:
 
     @staticmethod
     def _wheel(pos):
+        if pos < 85:   return (pos*3, 255 - pos*3, 0)
+        if pos < 170:  pos -= 85; return (255 - pos*3, 0, pos*3)
+        pos -= 170;    return (0, pos*3, 255 - pos*3)
         if pos < 85: return (pos*3, 255 - pos*3, 0)
         if pos < 170:
             pos -= 85

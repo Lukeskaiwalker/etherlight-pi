@@ -55,6 +55,19 @@ class SmallDisplay:
         idx = 0
         while not self._stop.is_set():
             with canvas(self.device) as draw:
+                try:
+                    from app_context import AppContext
+                    ctx = AppContext.current()
+                    st = ctx.get_state_snapshot()
+                    cfg = ctx.get_cfg_snapshot()
+                    temps = ctx.get_temp_snapshot() or {}
+                except Exception:
+                    st, cfg, temps = ({}, {}, {})
+                page = idx % 4
+                if page == 0:
+                    draw.text((4,4), "EtherPi", fill="white")
+                    draw.text((4,24), f"Switch {cfg.get('device',{}).get('switch_host','?')}", fill="white")
+                elif page == 1:
                 from app_context import AppContext
                 ctx = AppContext.current()
                 st = ctx.get_state_snapshot()
@@ -67,10 +80,16 @@ class SmallDisplay:
                     total = cfg.get('device',{}).get('ports',{}).get('count',0)
                     draw.text((4,4), "Links", fill="white")
                     draw.text((4,24), f"Up {up}/{total}", fill="white")
+                elif page == 2:
+                    cpu = temps.get('cpu_c'); bmp = temps.get('bmp280_c')
+                    draw.text((4,4), "Temps (°C)", fill="white")
+                    draw.text((4,24), f"CPU: {cpu if cpu is not None else '--'}", fill="white")
+                    draw.text((4,44), f"BMP280: {bmp if bmp is not None else '--'}", fill="white")
                 else:
                     role = cfg.get('sync',{}).get('mode','off')
                     draw.text((4,4), "Sync", fill="white")
                     draw.text((4,24), f"Role: {role}", fill="white")
+            idx += 1
             idx = (idx + 1) % 3
             self._stop.wait(2.0)
 
