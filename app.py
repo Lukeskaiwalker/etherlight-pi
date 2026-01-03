@@ -1,14 +1,19 @@
-import tempfile
-import uuid
-import socket
-import platform
+import json
+import math
 import os
-import tempfile
-import uuid
-import socket
 import platform
-import os
-import json, os, threading, time, math
+import re
+import shutil
+import socket
+import subprocess
+import tarfile
+import tempfile
+import threading
+import time
+import urllib.error
+import urllib.request
+import uuid
+import zipfile
 from flask import Flask, jsonify, request, send_from_directory
 from led_driver import LedStrip, hex_to_rgb
 from snmp_poller import SnmpPoller
@@ -174,14 +179,7 @@ def setup_page(): return send_from_directory('static', 'setup.html')
 
 @app.get('/api/version')
 def api_version():
-    ver = 'dev'
-    try:
-        vpath = os.path.join(os.path.dirname(__file__), 'VERSION')
-        if os.path.exists(vpath):
-            with open(vpath,'r') as f: ver = f.read().strip()
-    except Exception:
-        pass
-    return {'version': ver}
+    return {'version': _read_version()}
 
 @app.post('/api/reload')
 def api_reload():
@@ -314,13 +312,68 @@ def api_network():
     return {'ok': True, 'mode': mode}
 
 
-# --- System info helpers + route ---
+# --- System info + update helpers ---
+BASE_DIR = os.path.dirname(__file__)
+VERSION_PATH = os.path.join(BASE_DIR, 'VERSION')
+GITHUB_REPO = os.environ.get('ETHERLIGHT_GITHUB_REPO', 'Lukeskaiwalker/etherlight-pi')
+
+UPDATE_LOCK = threading.Lock()
+UPDATE_STATE = {
+    "status": "idle",
+    "message": "",
+    "current": None,
+    "latest": None,
+    "update_available": None,
+    "last_checked": None,
+    "last_action": None,
+    "release_url": None,
+    "asset_url": None,
+    "asset_name": None,
+}
+
+def _read_version():
+    try:
+        with open(VERSION_PATH, 'r') as f:
+            v = f.read().strip()
+        return v or 'dev'
+    except Exception:
+        return 'dev'
+
+def _parse_version(ver):
+    if not ver:
+        return None
+    s = ver.strip()
+    if s[:1].lower() == 'v':
+        s = s[1:]
+    parts = s.split('.')
+    if len(parts) < 3:
+        return None
+    try:
+        return tuple(int(p) for p in parts[:3])
+    except ValueError:
+        return None
+
+def _version_is_newer(latest, current):
+    l = _parse_version(latest)
+    c = _parse_version(current)
+    if not l or not c:
+        return False
+    return l > c
+
+def _load_device_name():
+    try:
+        with open(CONFIG_PATH, 'r') as f:
+            cfg = json.load(f)
+        return (cfg.get('device') or {}).get('name')
+    except Exception:
+        return None
+
 def _read_os_release_pretty():
     try:
-        with open('/etc/os-release','r') as f:
+        with open('/etc/os-release', 'r') as f:
             for line in f:
                 if line.startswith('PRETTY_NAME='):
-                    v = line.split('=',1)[1].strip().strip('"')
+                    v = line.split('=', 1)[1].strip().strip('"')
                     return v
     except Exception:
         pass
@@ -328,205 +381,335 @@ def _read_os_release_pretty():
 
 def _read_pi_model():
     try:
-        # Device-tree model (Pi-specific)
         p = '/proc/device-tree/model'
         if os.path.exists(p):
-            return open(p,'rb').read().decode('utf-8','ignore').strip('\x00').strip()
+            return open(p, 'rb').read().decode('utf-8', 'ignore').strip('\x00').strip()
     except Exception:
         pass
     return platform.machine()
 
-def _primary_ip():
-    ip = None
+def _default_iface():
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        s.connect(('8.8.8.8', 80))
-        ip = s.getsockname()[0]
-        s.close()
+        out = subprocess.check_output(
+            ['ip', '-4', 'route', 'show', 'default'],
+            text=True,
+            stderr=subprocess.DEVNULL
+        ).strip()
+        m = re.search(r'\bdev\s+(\S+)', out)
+        if m:
+            return m.group(1)
     except Exception:
         pass
-    return ip or '127.0.0.1'
+    return None
 
-def _mac_addr():
-    n = uuid.getnode()
-    mac = ':'.join(f"{(n>>ele) & 0xff:02x}" for ele in range(40,-1,-8))
-    return mac
-
-@app.route('/api/system')
-def api_system():
-    # Load config to pull the device name if set
-    cfg_path = os.path.expanduser('~/etherlight-pi/config.json')
-    name = None
+def _ip_for_iface(iface):
     try:
-        with open(cfg_path,'r') as f:
-            cfg = json.load(f)
-            name = (cfg.get('device') or {}).get('name')
+        out = subprocess.check_output(
+            ['ip', '-4', 'addr', 'show', 'dev', iface],
+            text=True,
+            stderr=subprocess.DEVNULL
+        )
+        m = re.search(r'\binet\s+(\d+\.\d+\.\d+\.\d+)', out)
+        if m:
+            return m.group(1)
     except Exception:
         pass
+    return None
 
-    return jsonify({
-        "version": (getattr(globals(), 'BUILD_VERSION', None) or "dev"),
+def _mac_for_iface(iface):
+    try:
+        p = f'/sys/class/net/{iface}/address'
+        if os.path.exists(p):
+            return open(p, 'r').read().strip()
+    except Exception:
+        pass
+    return None
+
+def _fallback_ip():
+    try:
+        out = subprocess.check_output(['hostname', '-I'], text=True, stderr=subprocess.DEVNULL).strip()
+        for token in out.split():
+            if token and not token.startswith('127.'):
+                return token
+    except Exception:
+        pass
+    return None
+
+def _primary_net_info():
+    iface = _default_iface()
+    ip = _ip_for_iface(iface) if iface else None
+    if not ip:
+        ip = _fallback_ip()
+    mac = _mac_for_iface(iface) if iface else None
+    if not mac:
+        n = uuid.getnode()
+        mac = ':'.join(f"{(n>>b)&0xff:02x}" for b in range(40, -1, -8))
+    return ip or '127.0.0.1', mac, iface
+
+def _sysinfo_payload():
+    ip, mac, iface = _primary_net_info()
+    return {
+        "version": _read_version(),
         "pi_model": _read_pi_model(),
         "os_pretty": _read_os_release_pretty(),
         "kernel": platform.release(),
         "arch": platform.machine(),
         "hostname": socket.gethostname(),
-        "ip": _primary_ip(),
-        "mac": _mac_addr(),
-        "name": name
-    })
-
-# --- injected utility endpoints ---
-from flask import jsonify, request
-import platform, socket, uuid, os, json
-
-# --- end injected ---
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=8080)
-
-
-# --- Robust system info endpoint (alt path) ---
-def _sysinfo_payload():
-    import os, socket, platform, uuid, json
-    def _os_pretty():
-        try:
-            with open('/etc/os-release','r') as f:
-                for line in f:
-                    if line.startswith('PRETTY_NAME='):
-                        return line.split('=',1)[1].strip().strip('"')
-        except Exception:
-            pass
-        return platform.platform()
-    def _pi_model():
-        try:
-            p = '/proc/device-tree/model'
-            if os.path.exists(p):
-                return open(p,'rb').read().decode('utf-8','ignore').strip('\x00').strip()
-        except Exception:
-            pass
-        return platform.machine()
-    def _primary_ip():
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8', 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return '127.0.0.1'
-    def _mac():
-        n = uuid.getnode()
-        return ':'.join(f"{(n>>b)&0xff:02x}" for b in range(40,-1,-8))
-    # read friendly name from config if present
-    name = None
-    try:
-        cfgp = os.path.expanduser('~/etherlight-pi/config.json')
-        with open(cfgp,'r') as f:
-            cfg = json.load(f)
-        name = (cfg.get('device') or {}).get('name')
-    except Exception:
-        pass
-    return {
-        "version": globals().get("BUILD_VERSION","dev"),
-        "pi_model": _pi_model(),
-        "os_pretty": _os_pretty(),
-        "kernel": platform.release(),
-        "arch": platform.machine(),
-        "hostname": socket.gethostname(),
-        "ip": _primary_ip(),
-        "mac": _mac(),
-        "name": name
+        "ip": ip,
+        "mac": mac,
+        "iface": iface,
+        "name": _load_device_name(),
     }
 
-try:
-    from flask import Response as _FResponse, jsonify, request
-except Exception:
-    _FResponse = None
-
-def _json_response(data):
-    import json
-    if _FResponse:
-        return _FResponse(json.dumps(data), mimetype='application/json')
-    return (json.dumps(data), 200, {'Content-Type':'application/json'})
-
-
-# keep /api/system working too, overriding any earlier text handlers if needed
-try:
-    @app.route('/api/system')
-    def api_system():
-        return _json_response(_sysinfo_payload())
-except Exception:
-    pass
-
-
-# --- Clean JSON system info ---
 @app.route('/api/sysinfo')
 def api_sysinfo():
-    import os, platform, socket, uuid, json
-    def os_pretty():
-        try:
-            with open('/etc/os-release','r') as f:
-                for line in f:
-                    if line.startswith('PRETTY_NAME='):
-                        return line.split('=',1)[1].strip().strip('"')
-        except Exception:
-            pass
-        return platform.platform()
+    return jsonify(_sysinfo_payload())
 
-    def pi_model():
-        try:
-            p = '/proc/device-tree/model'
-            if os.path.exists(p):
-                return open(p,'rb').read().decode('utf-8','ignore').strip('\x00').strip()
-        except Exception:
-            pass
-        return platform.machine()
+@app.route('/api/system')
+def api_system():
+    return jsonify(_sysinfo_payload())
 
-    def ip_addr():
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(('8.8.8.8',80))
-            ip = s.getsockname()[0]; s.close()
-            return ip
-        except Exception:
-            return '127.0.0.1'
+def _set_update_state(**kwargs):
+    with UPDATE_LOCK:
+        UPDATE_STATE.update(kwargs)
 
-    def mac_addr():
-        n = uuid.getnode()
-        return ':'.join(f"{(n>>b)&0xff:02x}" for b in range(40,-1,-8))
+def _get_update_state():
+    with UPDATE_LOCK:
+        return dict(UPDATE_STATE)
 
-    name = None
+def _run_cmd(cmd, cwd=None):
+    res = subprocess.run(cmd, cwd=cwd, check=True, text=True, capture_output=True)
+    return res.stdout.strip()
+
+def _git_is_clean():
     try:
-        with open(os.path.expanduser('~/etherlight-pi/config.json'),'r') as f:
-            cfg = json.load(f)
-        name = (cfg.get('device') or {}).get('name')
+        out = _run_cmd(['git', 'status', '--porcelain'], cwd=BASE_DIR)
+        return out.strip() == ''
     except Exception:
-        pass
+        return True
 
-    info = {
-        "version": globals().get("BUILD_VERSION","dev"),
-        "pi_model": pi_model(),
-        "os_pretty": os_pretty(),
-        "kernel": platform.release(),
-        "arch": platform.machine(),
-        "hostname": socket.gethostname(),
-        "ip": ip_addr(),
-        "mac": mac_addr(),
-        "name": name
-    }
-    return jsonify(info)
+def _systemctl(*args):
+    cmd = ['systemctl'] + list(args)
+    if os.geteuid() != 0:
+        cmd = ['sudo'] + cmd
+    _run_cmd(cmd)
 
-@app.route('/api/reload', methods=['POST'])
-def api_reload():
+def _install_service_file():
+    src = os.path.join(BASE_DIR, 'service', 'etherlight.service')
+    if not os.path.exists(src):
+        return
+    dst = '/etc/systemd/system/etherlight.service'
+    with open(src, 'r') as f:
+        content = f.read().replace('__BASE_DIR__', BASE_DIR)
+    tmp = dst + '.tmp'
+    with open(tmp, 'w') as f:
+        f.write(content)
+    os.replace(tmp, dst)
+    _systemctl('daemon-reload')
+
+def _pip_install():
+    venv_pip = os.path.join(BASE_DIR, '.venv', 'bin', 'pip')
+    if os.path.exists(venv_pip):
+        _run_cmd([venv_pip, 'install', '-r', 'requirements.txt'], cwd=BASE_DIR)
+    else:
+        _run_cmd(['python3', '-m', 'pip', 'install', '-r', 'requirements.txt'], cwd=BASE_DIR)
+
+def _restart_service():
+    _systemctl('restart', 'etherlight.service')
+
+def _fetch_latest_tag():
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/tags?per_page=1'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Etherlight-Pi'})
+    with urllib.request.urlopen(req, timeout=8) as resp:
+        data = json.load(resp)
+    if isinstance(data, list) and data:
+        tag = (data[0].get('name') or '').strip()
+        return tag[1:] if tag.lower().startswith('v') else tag
+    return None
+
+def _fetch_latest_release():
+    url = f'https://api.github.com/repos/{GITHUB_REPO}/releases/latest'
+    req = urllib.request.Request(url, headers={'User-Agent': 'Etherlight-Pi'})
     try:
-        os.system('sudo systemctl restart etherlight.service >/dev/null 2>&1 &')
-        return jsonify({"ok": True})
+        with urllib.request.urlopen(req, timeout=8) as resp:
+            data = json.load(resp)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return _fetch_latest_tag(), None, None, None
+        raise
+    tag = (data.get('tag_name') or data.get('name') or '').strip()
+    latest = tag[1:] if tag.lower().startswith('v') else tag
+    release_url = data.get('html_url')
+    asset_url = None
+    asset_name = None
+    for asset in (data.get('assets') or []):
+        name = (asset.get('name') or '').strip()
+        if name.endswith(('.zip', '.tar.gz', '.tgz', '.tar')):
+            asset_url = asset.get('browser_download_url')
+            asset_name = name
+            break
+    return latest, release_url, asset_url, asset_name
+
+@app.get('/api/update/status')
+def api_update_status():
+    return jsonify(_get_update_state())
+
+@app.get('/api/update/check')
+def api_update_check():
+    current = _read_version()
+    _set_update_state(status='checking', message='Checking for updates...', current=current)
+    try:
+        latest, release_url, asset_url, asset_name = _fetch_latest_release()
+        update_available = _version_is_newer(latest, current) if latest else False
+        msg = 'Update check complete.' if latest else 'No releases/tags found.'
+        _set_update_state(
+            status='ok',
+            message=msg,
+            current=current,
+            latest=latest,
+            update_available=update_available,
+            last_checked=time.time(),
+            release_url=release_url,
+            asset_url=asset_url,
+            asset_name=asset_name,
+        )
+        return jsonify({
+            "ok": True,
+            "current": current,
+            "latest": latest,
+            "update_available": update_available,
+            "release_url": release_url,
+            "asset_url": asset_url,
+            "asset_name": asset_name,
+        })
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        _set_update_state(
+            status='error',
+            message=str(e),
+            current=current,
+            last_checked=time.time()
+        )
+        return jsonify({"ok": False, "error": str(e), "current": current}), 503
+
+def _update_in_progress():
+    return _get_update_state().get('status') == 'running'
+
+def _run_git_update(full_install=False):
+    _set_update_state(status='running', message='Updating from git...', last_action='git')
+    try:
+        if not _git_is_clean():
+            raise RuntimeError('Local changes detected. Commit/stash before updating.')
+        _run_cmd(['git', 'fetch', '--tags', 'origin'], cwd=BASE_DIR)
+        _run_cmd(['git', 'pull', '--ff-only'], cwd=BASE_DIR)
+        if full_install:
+            _run_cmd(['bash', os.path.join(BASE_DIR, 'install.sh')], cwd=BASE_DIR)
+        else:
+            _pip_install()
+            _install_service_file()
+        _restart_service()
+        _set_update_state(
+            status='ok',
+            message='Update applied.',
+            current=_read_version(),
+            update_available=False
+        )
+    except Exception as e:
+        _set_update_state(status='error', message=str(e))
+
+def _extract_archive(path, dest_dir):
+    if zipfile.is_zipfile(path):
+        with zipfile.ZipFile(path, 'r') as zf:
+            zf.extractall(dest_dir)
+    elif tarfile.is_tarfile(path):
+        with tarfile.open(path, 'r:*') as tf:
+            tf.extractall(dest_dir)
+    else:
+        raise ValueError('Unsupported archive type.')
+
+def _copy_update_tree(src_root):
+    skip_dirs = {'.git', '.venv', '__pycache__'}
+    skip_files = {'config.json'}
+    for root, dirs, files in os.walk(src_root):
+        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        rel = os.path.relpath(root, src_root)
+        dest_root = BASE_DIR if rel == '.' else os.path.join(BASE_DIR, rel)
+        os.makedirs(dest_root, exist_ok=True)
+        for fname in files:
+            if fname in skip_files:
+                continue
+            if fname.endswith('.pyc') or fname == '.DS_Store':
+                continue
+            src = os.path.join(root, fname)
+            dst = os.path.join(dest_root, fname)
+            shutil.copy2(src, dst)
+
+def _find_extract_root(dest_dir):
+    entries = [e for e in os.listdir(dest_dir) if not e.startswith('.')]
+    if len(entries) == 1:
+        candidate = os.path.join(dest_dir, entries[0])
+        if os.path.isdir(candidate):
+            return candidate
+    return dest_dir
+
+def _run_upload_update(archive_path):
+    _set_update_state(status='running', message='Applying uploaded update...', last_action='upload')
+    tmp_dir = tempfile.mkdtemp(prefix='etherlight_update_')
+    try:
+        _extract_archive(archive_path, tmp_dir)
+        root = _find_extract_root(tmp_dir)
+        if not os.path.exists(os.path.join(root, 'app.py')):
+            raise ValueError('Uploaded archive does not look like an Etherlight release.')
+        _copy_update_tree(root)
+        _pip_install()
+        _install_service_file()
+        _restart_service()
+        _set_update_state(
+            status='ok',
+            message='Update applied.',
+            current=_read_version(),
+            update_available=False
+        )
+    except Exception as e:
+        _set_update_state(status='error', message=str(e))
+    finally:
+        try:
+            os.remove(archive_path)
+        except Exception:
+            pass
+        try:
+            shutil.rmtree(tmp_dir)
+        except Exception:
+            pass
+
+@app.post('/api/update/pull')
+def api_update_pull():
+    if _update_in_progress():
+        return jsonify({"ok": False, "error": "Update already in progress."}), 409
+    body = request.get_json(silent=True) or {}
+    full = bool(body.get('full'))
+    threading.Thread(target=_run_git_update, args=(full,), daemon=True).start()
+    return jsonify({"ok": True, "status": "running"})
+
+@app.post('/api/update/upload')
+def api_update_upload():
+    if _update_in_progress():
+        return jsonify({"ok": False, "error": "Update already in progress."}), 409
+    if 'file' not in request.files:
+        return jsonify({"ok": False, "error": "Missing file upload."}), 400
+    upload = request.files['file']
+    if not upload.filename:
+        return jsonify({"ok": False, "error": "Missing filename."}), 400
+    suffix = os.path.splitext(upload.filename)[1] or '.zip'
+    fd, tmp_path = tempfile.mkstemp(prefix='etherlight_upload_', suffix=suffix)
+    os.close(fd)
+    upload.save(tmp_path)
+    threading.Thread(target=_run_upload_update, args=(tmp_path,), daemon=True).start()
+    return jsonify({"ok": True, "status": "running"})
 
 @app.route('/api/poe')
 def api_poe():
     # No standard MIB exposed by your USW-24-PoE; stub for UI
     return jsonify({"supported": False})
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=8080)

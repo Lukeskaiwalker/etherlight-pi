@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 User=root
-WorkingDirectory=/home/pi/etherlight-pi
-ExecStart=/usr/bin/python3 /home/pi/etherlight-pi/app.py
+WorkingDirectory=__BASE_DIR__
+ExecStart=__BASE_DIR__/.venv/bin/python __BASE_DIR__/app.py
 Restart=always
 Environment=PYTHONUNBUFFERED=1
 

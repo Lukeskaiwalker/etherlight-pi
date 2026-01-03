@@ -172,8 +172,19 @@
         <div>Version: <span id="ver">loading…</span></div>
         <div>IP: <span id="sys_ip">–</span></div>
         <div>MAC: <span id="sys_mac">–</span></div>
+        <div>Update: <span id="upd_status">–</span></div>
+        <div>Latest: <span id="upd_latest">–</span></div>
       </div>
-      <div class="row"><button class="btn" onclick="reloadSvc()">Reload Program</button></div>
+      <div class="row">
+        <button class="btn" onclick="reloadSvc()">Reload Program</button>
+        <button class="btn" onclick="checkUpdate()">Check for updates</button>
+        <button class="btn" onclick="applyUpdateGit()">Update via Git</button>
+      </div>
+      <div class="row">
+        <input id="upd_file" type="file" accept=".zip,.tar,.gz,.tgz">
+        <button class="btn" onclick="uploadUpdate()">Upload update</button>
+      </div>
+      <div class="muted" id="upd_msg" style="margin-top:6px"></div>
     </div>
   </div>
 
@@ -203,6 +214,92 @@ function toggleStatic(){
   for(const id of ['net_ip','net_gw','net_dns']){
     const el = document.getElementById(id); if(el){ el.disabled = dis; }
   }
+}
+
+let updatePoll = null;
+
+function setUpdateUI(state){
+  const statusEl = document.getElementById('upd_status');
+  const latestEl = document.getElementById('upd_latest');
+  const msgEl = document.getElementById('upd_msg');
+  if(!statusEl || !latestEl){ return; }
+  const status = state?.status || 'idle';
+  let label = status;
+  if(state?.update_available === true){
+    label = 'update available';
+  }else if(status === 'ok' && state?.latest){
+    label = 'up to date';
+  }
+  statusEl.textContent = label;
+  latestEl.textContent = state?.latest || '–';
+  if(msgEl){ msgEl.textContent = state?.message || ''; }
+}
+
+async function refreshUpdateStatus(){
+  try{
+    const r = await fetch('/api/update/status');
+    if(!r.ok) return;
+    const j = await r.json();
+    setUpdateUI(j);
+    if(j.status === 'running' || j.status === 'checking') startUpdatePolling();
+    else stopUpdatePolling();
+  }catch(e){}
+}
+
+function startUpdatePolling(){
+  if(updatePoll) return;
+  updatePoll = setInterval(refreshUpdateStatus, 2000);
+}
+
+function stopUpdatePolling(){
+  if(updatePoll){
+    clearInterval(updatePoll);
+    updatePoll = null;
+  }
+}
+
+async function checkUpdate(){
+  const msg = document.getElementById('upd_msg');
+  if(msg) msg.textContent = 'Checking for updates...';
+  try{
+    const r = await fetch('/api/update/check');
+    const j = await r.json();
+    if(!r.ok && msg){
+      msg.textContent = j.error || 'Update check failed.';
+    }
+  }catch(e){
+    if(msg) msg.textContent = 'Update check failed.';
+  }
+  await refreshUpdateStatus();
+}
+
+async function applyUpdateGit(){
+  if(!confirm('Update from Git now? The service will restart.')) return;
+  const msg = document.getElementById('upd_msg');
+  if(msg) msg.textContent = 'Starting update...';
+  const r = await fetch('/api/update/pull', {method:'POST'});
+  if(!r.ok){
+    const j = await r.json().catch(()=>({}));
+    if(msg) msg.textContent = j.error || 'Update failed to start.';
+    return;
+  }
+  startUpdatePolling();
+}
+
+async function uploadUpdate(){
+  const file = document.getElementById('upd_file')?.files?.[0];
+  if(!file){ alert('Select a release .zip or .tar.gz first.'); return; }
+  const fd = new FormData();
+  fd.append('file', file);
+  const msg = document.getElementById('upd_msg');
+  if(msg) msg.textContent = 'Uploading update...';
+  const r = await fetch('/api/update/upload', {method:'POST', body: fd});
+  if(!r.ok){
+    const j = await r.json().catch(()=>({}));
+    if(msg) msg.textContent = j.error || 'Upload failed.';
+    return;
+  }
+  startUpdatePolling();
 }
 
 async function load(){
@@ -254,6 +351,7 @@ async function load(){
   document.getElementById('lc_10000').value  = lc['10000']|| '#2979FF';
 
   toggleStatic();
+  await refreshUpdateStatus();
 }
 
 async function save(){

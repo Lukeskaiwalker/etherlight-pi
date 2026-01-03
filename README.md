@@ -43,14 +43,44 @@
 
 ## Software install
 ```bash
+git clone https://github.com/Lukeskaiwalker/etherlight-pi
+cd etherlight-pi
 ./install.sh
 ```
+To keep onboard audio enabled:
+```bash
+DISABLE_AUDIO=0 ./install.sh
+```
 The script:
-- Installs Python deps (Flask, PySNMP, rpi-ws281x, luma, smbus2, bmp280)
+- Installs OS deps (Python, build tools, SNMP, I2C tools, scons)
 - Enables **SPI** (display) and **I2C** (BMP280)
-- Installs a systemd service and starts the app
+- Creates a `.venv` and installs Python deps (Flask, PySNMP, rpi-ws281x, luma, smbus2, bmp280)
+- Installs a systemd service that uses the venv and starts the app
+- Disables onboard audio by default (set `DISABLE_AUDIO=0` to keep audio); reboot recommended after changes
 
 Open: `http://<pi-ip>:8080/`
+
+---
+
+## Update
+### From the UI
+- Go to **Setup → Service**.
+- **Check for updates** (requires internet on the Pi).
+- **Update via Git** to pull the latest release and restart the service.
+- **Offline update:** download a release `.zip`/`.tar.gz` from GitHub on another machine,
+  then upload it on the Service card.
+
+### Manual
+```bash
+cd ~/etherlight-pi
+git pull
+./install.sh
+```
+If you move the repo, rerun the install so the systemd service points at the new path.
+
+## Versioning
+Releases use `YYYY.MM.N` (year, month, increment). Example: `2026.01.1`.
+Use `scripts/bump_version.py` to increment the month counter and update `VERSION`.
 
 ---
 
@@ -73,7 +103,7 @@ Open: `http://<pi-ip>:8080/`
 ---
 
 ## Troubleshooting
-- **LED mmap()/PWM error**: disable onboard audio (`dtparam=audio=off`) and/or run service as root; ensure GND shared.
+- **LED mmap()/PWM error**: rerun `DISABLE_AUDIO=1 ./install.sh` (or `./fix-ws281x-root-audiooff.sh`) and reboot; ensure GND shared.
 - **No BMP280 reading**: enable I2C, check wiring & address (0x76 vs 0x77). Use `i2cdetect -y 1` to confirm presence.
 - **Display blank**: confirm SPI enabled; check driver/size in `config.json` and wiring.
 
