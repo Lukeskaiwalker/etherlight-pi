@@ -9,7 +9,11 @@
       --bg:#0b0f14; --card:#111821; --text:#e6edf3; --muted:#9fb2c3; --line:#1f2a36; --btn:#182433;
     }
     body{font-family:system-ui,sans-serif;margin:20px;max-width:980px;background:var(--bg);color:var(--text)}
-    a.btn,button.btn{padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--btn);color:var(--text);text-decoration:none;cursor:pointer}
+    a.btn,button.btn{
+      padding:8px 12px;border:1px solid var(--line);border-radius:10px;background:var(--btn);
+      color:var(--text);text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;
+      justify-content:center;min-height:36px;line-height:1;font:inherit
+    }
     .logo{font-weight:800;font-size:26px;letter-spacing:.5px;background:linear-gradient(90deg,#ff5f6d,#ffc371,#47cf73,#2ea8ff,#bd34fe);
       -webkit-background-clip:text;background-clip:text;color:transparent}
     .top{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
@@ -18,7 +22,10 @@
     .muted{color:var(--muted)}
     .grid2{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
     label{display:flex;flex-direction:column;gap:6px;font-size:.95rem}
-    input,select{padding:8px 10px;background:#0a0f14;color:var(--text);border:1px solid var(--line);border-radius:8px;width:100%;max-width:260px;box-sizing:border-box}
+    input,select{padding:8px 10px;background:#0a0f14;color:var(--text);border:1px solid var(--line);border-radius:8px;width:100%;box-sizing:border-box;height:36px}
+    input[type="color"]{padding:0;width:64px;height:36px;border-radius:8px;background:#0a0f14;appearance:none}
+    input[type="color"]::-webkit-color-swatch-wrapper{padding:4px}
+    input[type="color"]::-webkit-color-swatch{border:none;border-radius:6px}
     .row{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
   </style>
 </head>
@@ -177,8 +184,8 @@
       </div>
       <div class="row">
         <button class="btn" onclick="reloadSvc()">Reload Program</button>
-        <button class="btn" onclick="checkUpdate()">Check for updates</button>
-        <button class="btn" onclick="applyUpdateGit()">Update via Git</button>
+        <button class="btn" id="btn_check_update" onclick="checkUpdate()">Check for updates</button>
+        <button class="btn" id="btn_apply_update" onclick="applyUpdateGit()" style="display:none">Update via Git</button>
       </div>
       <div class="row">
         <input id="upd_file" type="file" accept=".zip,.tar,.gz,.tgz">
@@ -222,6 +229,8 @@ function setUpdateUI(state){
   const statusEl = document.getElementById('upd_status');
   const latestEl = document.getElementById('upd_latest');
   const msgEl = document.getElementById('upd_msg');
+  const checkBtn = document.getElementById('btn_check_update');
+  const applyBtn = document.getElementById('btn_apply_update');
   if(!statusEl || !latestEl){ return; }
   const status = state?.status || 'idle';
   let label = status;
@@ -233,6 +242,9 @@ function setUpdateUI(state){
   statusEl.textContent = label;
   latestEl.textContent = state?.latest || '–';
   if(msgEl){ msgEl.textContent = state?.message || ''; }
+  const showUpdate = state?.update_available === true && state?.last_checked;
+  if(applyBtn){ applyBtn.style.display = showUpdate ? 'inline-flex' : 'none'; }
+  if(checkBtn){ checkBtn.style.display = showUpdate ? 'none' : 'inline-flex'; }
 }
 
 async function refreshUpdateStatus(){
