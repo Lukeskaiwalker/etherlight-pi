@@ -6,6 +6,46 @@ except Exception:
     SMBus = None
     i2c_msg = None
 
+def _parse_i2c_addr(addr):
+    try:
+        if isinstance(addr, str):
+            a = addr.strip()
+            if a.lower().startswith("0x"):
+                return int(a, 16)
+            return int(a)
+        return int(addr)
+    except Exception:
+        return None
+
+def probe_bmp280(cfg):
+    """Quick I2C probe: returns True if sensor responds, False if not, None on error."""
+    if SMBus is None:
+        return None
+    s_cfg = (cfg.get("sensors") or {}).get("bmp280") or {}
+    try:
+        busno = int(s_cfg.get("bus", 1))
+    except Exception:
+        return None
+    addr = _parse_i2c_addr(s_cfg.get("address", "0x76"))
+    if addr is None:
+        return None
+    try:
+        bus = SMBus(busno)
+    except Exception:
+        return None
+    try:
+        cid = bus.read_byte_data(addr, 0xD0)
+    except Exception:
+        cid = None
+    finally:
+        try:
+            bus.close()
+        except Exception:
+            pass
+    if cid is None:
+        return False
+    return cid in (0x58, 0x60)
+
 class TempMonitor(threading.Thread):
     def __init__(self, cfg):
         super().__init__(daemon=True)
@@ -29,28 +69,50 @@ class TempMonitor(threading.Thread):
             snap["bmp280_c"] = snap.get("ext_c")
             return snap
 
+    def apply_config(self, cfg):
+        self.cfg = cfg or {}
+        # reset bus/cal so next read re-inits with new settings
+        self._close_bus()
+        self._cal = None
+        self.addr = None
+        self.chip_id = None
+        s_cfg = (self.cfg.get("sensors") or {}).get("bmp280") or {}
+        if not s_cfg.get("enabled", False):
+            with self._lock:
+                self.values["ext_c"] = None
+                self.values["bmp280_c"] = None
+
     # ---------- low-level i2c helpers ----------
+    def _sensor_enabled(self):
+        s_cfg = (self.cfg.get("sensors") or {}).get("bmp280") or {}
+        return bool(s_cfg.get("enabled", False))
+
     def _open_bus(self):
         if SMBus is None:
             print("[temps] smbus2 not available")
             return False
         s_cfg = (self.cfg.get("sensors") or {}).get("bmp280") or {}
         if not s_cfg.get("enabled", False):
-            print("[temps] sensor disabled in config")
             return False
         try:
             busno = int(s_cfg.get("bus", 1))
-            addr = s_cfg.get("address", "0x76")
-            if isinstance(addr, str) and addr.startswith("0x"):
-                addr = int(addr, 16)
-            else:
-                addr = int(addr)
+            addr = _parse_i2c_addr(s_cfg.get("address", "0x76"))
+            if addr is None:
+                return False
             self.bus = SMBus(busno)
             self.addr = addr
             return True
         except Exception as e:
             print(f"[temps] open bus failed: {e}")
             return False
+
+    def _close_bus(self):
+        if self.bus:
+            try:
+                self.bus.close()
+            except Exception:
+                pass
+        self.bus = None
 
     def _wr8(self, reg, val):
         try:
@@ -150,6 +212,8 @@ class TempMonitor(threading.Thread):
 
     def _read_ext_c(self):
         """Read compensated temperature in °C using datasheet formula."""
+        if not self._sensor_enabled():
+            return None
         if not self._cal:
             if not self._init_bmx():
                 return None

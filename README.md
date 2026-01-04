@@ -69,6 +69,7 @@ Open: `http://<pi-ip>:8080/`
 - **Update via Git** to pull the latest release and restart the service.
 - **Offline update:** download a release `.zip`/`.tar.gz` from GitHub on another machine,
   then upload it on the Service card.
+- Updates keep your local settings in `config.local.json`.
 
 ### Manual
 ```bash
@@ -85,12 +86,14 @@ Use `scripts/bump_version.py` to increment the month counter and update `VERSION
 ---
 
 ## Configuration
-- Edit `config.json`
+- Edit `config.local.json` (auto-created on first run, preserved across updates).
+- `config.json` is the template shipped with the repo.
   - `device.switch_host` / `device.snmp.community`
   - `device.ports.count` if auto-detect differs
   - `led.*` for type/order/pin/brightness
   - `display.enabled` and model/size
   - `sensors.bmp280.enabled`, `bus`, `address` (`0x76` or `0x77`)
+- If `device.name` is empty or `EtherPi`, it auto-sets to `EtherPi-XXXX` (based on MAC).
 
 ---
 
@@ -105,7 +108,8 @@ Use `scripts/bump_version.py` to increment the month counter and update `VERSION
 ## Troubleshooting
 - **LED mmap()/PWM error**: rerun `DISABLE_AUDIO=1 ./install.sh` (or `./fix-ws281x-root-audiooff.sh`) and reboot; ensure GND shared.
 - **No BMP280 reading**: enable I2C, check wiring & address (0x76 vs 0x77). Use `i2cdetect -y 1` to confirm presence.
-- **Display blank**: confirm SPI enabled; check driver/size in `config.json` and wiring.
+- **BMP280 auto-disabled**: if no sensor is detected at boot it is turned off in config; re-enable in **Setup → Sensors** after wiring.
+- **Display blank**: confirm SPI enabled; ensure `spidev` is installed in the venv (rerun `./install.sh`); check driver/size in `config.local.json` and wiring.
 
 ---
 

@@ -5,8 +5,8 @@
   },
   "device": {
     "leds_per_port": 2,
-    "model_hint": "Linux USW-24-PoE 3.18.24 #0 Thu Aug 30 12:10:54 2018 mips",
-    "name": "PSE Switch 1",
+    "model_hint": "",
+    "name": "EtherPi",
     "ports": {
       "count": 26,
       "map": {}
@@ -15,8 +15,8 @@
       "community": "public",
       "version": "v2c"
     },
-    "switch_host": "192.168.1.100",
-    "switch_name": "USW-24-PoE"
+    "switch_host": "",
+    "switch_name": ""
   },
   "display": {
     "driver": "ssd1351",

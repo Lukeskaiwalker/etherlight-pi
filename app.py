@@ -20,9 +20,40 @@ from snmp_poller import SnmpPoller
 from udp_sync import UdpSync
 from display import SmallDisplay
 from app_context import AppContext
-from temps import TempMonitor
+from temps import TempMonitor, probe_bmp280
 
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), 'config.json')
+BASE_DIR = os.path.dirname(__file__)
+DEFAULT_CONFIG_PATH = os.path.join(BASE_DIR, 'config.json')
+LOCAL_CONFIG_PATH = os.path.join(BASE_DIR, 'config.local.json')
+
+def _ensure_local_config():
+    if os.path.exists(LOCAL_CONFIG_PATH):
+        return LOCAL_CONFIG_PATH
+    if os.path.exists(DEFAULT_CONFIG_PATH):
+        try:
+            shutil.copy2(DEFAULT_CONFIG_PATH, LOCAL_CONFIG_PATH)
+            return LOCAL_CONFIG_PATH
+        except Exception:
+            return DEFAULT_CONFIG_PATH
+    return LOCAL_CONFIG_PATH
+
+def _ensure_config_path():
+    env_path = os.environ.get('ETHERLIGHT_CONFIG_PATH')
+    if env_path:
+        if os.path.exists(env_path):
+            return env_path
+        try:
+            parent = os.path.dirname(env_path)
+            if parent:
+                os.makedirs(parent, exist_ok=True)
+            if os.path.exists(DEFAULT_CONFIG_PATH):
+                shutil.copy2(DEFAULT_CONFIG_PATH, env_path)
+                return env_path
+        except Exception:
+            pass
+    return _ensure_local_config()
+
+CONFIG_PATH = _ensure_config_path()
 
 def load_config():
     with open(CONFIG_PATH,'r') as f: return json.load(f)
@@ -30,8 +61,45 @@ def load_config():
 def save_config(cfg):
     with open(CONFIG_PATH,'w') as f: json.dump(cfg,f,indent=2)
 
+def _device_suffix():
+    try:
+        mac_hex = f"{uuid.getnode():012x}"
+        tail = mac_hex[-4:].upper()
+        return tail or uuid.uuid4().hex[:4].upper()
+    except Exception:
+        return uuid.uuid4().hex[:4].upper()
+
+def _ensure_device_name(cfg):
+    dev = cfg.setdefault('device', {})
+    name = str(dev.get('name') or '').strip()
+    if not name or name.lower() == 'etherpi':
+        dev['name'] = f"EtherPi-{_device_suffix()}"
+        save_config(cfg)
+    return cfg
+
+def _auto_disable_missing_bmp280(cfg):
+    s_cfg = (cfg.get('sensors') or {}).get('bmp280') or {}
+    if not s_cfg.get('enabled', False):
+        return cfg
+    detected = probe_bmp280(cfg)
+    if detected is None:
+        return cfg
+    changed = False
+    if detected is False:
+        s_cfg['enabled'] = False
+        s_cfg['auto_disabled'] = True
+        changed = True
+    else:
+        if s_cfg.get('auto_disabled'):
+            s_cfg.pop('auto_disabled', None)
+            changed = True
+    if changed:
+        cfg.setdefault('sensors', {})['bmp280'] = s_cfg
+        save_config(cfg)
+    return cfg
+
 app = Flask(__name__, static_folder='static', static_url_path='/static')
-cfg = load_config()
+cfg = _auto_disable_missing_bmp280(_ensure_device_name(load_config()))
 stop_event = threading.Event()
 
 # Shared runtime state
@@ -192,7 +260,15 @@ def api_reload():
 def api_config():
     if request.method == 'GET': return jsonify(ctx.get_cfg_snapshot())
     data = request.get_json(force=True)
+    s_cfg = (data.get('sensors') or {}).get('bmp280') or {}
+    if s_cfg.get('enabled', False) and 'auto_disabled' in s_cfg:
+        s_cfg.pop('auto_disabled', None)
+        data.setdefault('sensors', {})['bmp280'] = s_cfg
     save_config(data); ctx.load_cfg()
+    try:
+        tempmon.apply_config(data)
+    except Exception:
+        pass
     return jsonify({'ok': True})
 
 @app.get('/api/state')
@@ -313,7 +389,6 @@ def api_network():
 
 
 # --- System info + update helpers ---
-BASE_DIR = os.path.dirname(__file__)
 VERSION_PATH = os.path.join(BASE_DIR, 'VERSION')
 GITHUB_REPO = os.environ.get('ETHERLIGHT_GITHUB_REPO', 'Lukeskaiwalker/etherlight-pi')
 
@@ -481,12 +556,38 @@ def _run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, check=True, text=True, capture_output=True)
     return res.stdout.strip()
 
-def _git_is_clean():
+def _git_dirty_paths():
     try:
         out = _run_cmd(['git', 'status', '--porcelain'], cwd=BASE_DIR)
-        return out.strip() == ''
     except Exception:
-        return True
+        return []
+    paths = []
+    for line in out.splitlines():
+        if len(line) < 4:
+            continue
+        path = line[3:]
+        if path.startswith('"') and path.endswith('"'):
+            path = path[1:-1]
+        paths.append(path)
+    return paths
+
+def _git_blocking_changes():
+    ignore = {
+        os.path.relpath(DEFAULT_CONFIG_PATH, BASE_DIR),
+        os.path.relpath(LOCAL_CONFIG_PATH, BASE_DIR),
+    }
+    return [p for p in _git_dirty_paths() if p not in ignore]
+
+def _stash_config_json():
+    rel = os.path.relpath(DEFAULT_CONFIG_PATH, BASE_DIR)
+    try:
+        out = _run_cmd(['git', 'status', '--porcelain', '--', rel], cwd=BASE_DIR)
+        if out.strip():
+            _run_cmd(['git', 'stash', 'push', '-m', 'etherlight-config', '--', rel], cwd=BASE_DIR)
+            return True
+    except Exception:
+        pass
+    return False
 
 def _systemctl(*args):
     cmd = ['systemctl'] + list(args)
@@ -596,9 +697,13 @@ def _update_in_progress():
 
 def _run_git_update(full_install=False):
     _set_update_state(status='running', message='Updating from git...', last_action='git')
+    stashed = False
     try:
-        if not _git_is_clean():
-            raise RuntimeError('Local changes detected. Commit/stash before updating.')
+        _ensure_local_config()
+        blocking = _git_blocking_changes()
+        if blocking:
+            raise RuntimeError('Local changes detected: ' + ', '.join(blocking))
+        stashed = _stash_config_json()
         _run_cmd(['git', 'fetch', '--tags', 'origin'], cwd=BASE_DIR)
         _run_cmd(['git', 'pull', '--ff-only'], cwd=BASE_DIR)
         if full_install:
@@ -607,6 +712,11 @@ def _run_git_update(full_install=False):
             _pip_install()
             _install_service_file()
         _restart_service()
+        if stashed:
+            try:
+                _run_cmd(['git', 'stash', 'drop'], cwd=BASE_DIR)
+            except Exception:
+                pass
         _set_update_state(
             status='ok',
             message='Update applied.',
@@ -628,7 +738,7 @@ def _extract_archive(path, dest_dir):
 
 def _copy_update_tree(src_root):
     skip_dirs = {'.git', '.venv', '__pycache__'}
-    skip_files = {'config.json'}
+    skip_files = {'config.json', 'config.local.json'}
     for root, dirs, files in os.walk(src_root):
         dirs[:] = [d for d in dirs if d not in skip_dirs]
         rel = os.path.relpath(root, src_root)

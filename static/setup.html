@@ -140,6 +140,26 @@
       </div>
     </div>
 
+    <!-- SENSORS -->
+    <div class="card">
+      <h3>Sensors</h3>
+      <div class="grid2">
+        <label>BMP280 Enabled
+          <select id="bmp_enabled">
+            <option value="true">On</option>
+            <option value="false">Off</option>
+          </select>
+        </label>
+        <label>I2C Bus <input id="bmp_bus" type="number" min="0" max="10" placeholder="1"></label>
+        <label>Address <input id="bmp_addr" placeholder="0x76"></label>
+        <div>Auto-disabled: <span id="bmp_auto">–</span></div>
+      </div>
+      <div class="row">
+        <button class="btn" onclick="enableBmp()">Enable Sensor</button>
+      </div>
+      <div class="muted" id="bmp_hint" style="margin-top:6px"></div>
+    </div>
+
     <!-- SYNC -->
     <div class="card">
       <h3>Sync</h3>
@@ -348,6 +368,18 @@ async function load(){
   document.getElementById('disp_page_sec').value = CFG.display?.page_sec ?? 5;
   document.getElementById('disp_slide_ms').value = CFG.display?.slide_ms ?? 400;
 
+  // Sensors (BMP280)
+  const bmp = CFG.sensors?.bmp280 || {};
+  document.getElementById('bmp_enabled').value = (bmp.enabled !== false) ? 'true' : 'false';
+  document.getElementById('bmp_bus').value = bmp.bus ?? 1;
+  document.getElementById('bmp_addr').value = bmp.address ?? '0x76';
+  const autoOff = bmp.auto_disabled === true;
+  document.getElementById('bmp_auto').textContent = autoOff ? 'yes' : 'no';
+  const bmpHint = document.getElementById('bmp_hint');
+  if(bmpHint){
+    bmpHint.textContent = autoOff ? 'Sensor not detected. Click Enable Sensor to retry.' : '';
+  }
+
   // Sync
   document.getElementById('sync_mode').value = CFG.sync?.mode || 'off';
   document.getElementById('sync_mc').value   = CFG.sync?.multicast || '239.0.0.57';
@@ -397,6 +429,17 @@ async function save(){
   CFG.display.page_sec = parseInt(document.getElementById('disp_page_sec').value||'5',10);
   CFG.display.slide_ms = parseInt(document.getElementById('disp_slide_ms').value||'400',10);
 
+  // Sensors (BMP280)
+  CFG.sensors = CFG.sensors || {};
+  CFG.sensors.bmp280 = CFG.sensors.bmp280 || {};
+  CFG.sensors.bmp280.enabled = (document.getElementById('bmp_enabled').value === 'true');
+  const busVal = parseInt(document.getElementById('bmp_bus').value||'1',10);
+  CFG.sensors.bmp280.bus = Number.isFinite(busVal) ? busVal : 1;
+  CFG.sensors.bmp280.address = (document.getElementById('bmp_addr').value||'0x76').trim();
+  if (CFG.sensors.bmp280.enabled && CFG.sensors.bmp280.auto_disabled){
+    delete CFG.sensors.bmp280.auto_disabled;
+  }
+
   // Sync
   CFG.sync = CFG.sync || {};
   CFG.sync.mode = document.getElementById('sync_mode').value || 'off';
@@ -434,6 +477,12 @@ async function detectSwitch(){
 async function reloadSvc(){
   await fetch('/api/reload',{method:'POST'});
   alert('Restarting service…');
+}
+
+async function enableBmp(){
+  const sel = document.getElementById('bmp_enabled');
+  if(sel) sel.value = 'true';
+  await save();
 }
 
 async function applyNet(){
