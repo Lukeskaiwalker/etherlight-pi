@@ -60,28 +60,31 @@ def _mk_device(cfg):
         # No hardware: run headless with provided dimensions so we can still render/animate
         return None, width, height
 
-    serial = spi(
-        port=(cfg or {}).get("spi_port", 0),
-        device=(cfg or {}).get("spi_device", 0),
-        gpio_DC=(cfg or {}).get("gpio_dc", 24),
-        gpio_RST=(cfg or {}).get("gpio_rst", 25),
-        gpio_CS=(cfg or {}).get("gpio_cs", 8),
-    )
-
-    # Normalize model strings
-    if "st7789" in model:
-        dev = dev_st7789(serial, width=width, height=height, rotate=rotation)
-    else:
-        # default to ssd1351 128x128
-        dev = dev_ssd1351(serial, rotate=luma_rot)
-
-    # Prefer real device-reported size if available
     try:
-        width  = getattr(dev, "width", width)
-        height = getattr(dev, "height", height)
+        serial = spi(
+            port=(cfg or {}).get("spi_port", 0),
+            device=(cfg or {}).get("spi_device", 0),
+            gpio_DC=(cfg or {}).get("gpio_dc", 24),
+            gpio_RST=(cfg or {}).get("gpio_rst", 25),
+            gpio_CS=(cfg or {}).get("gpio_cs", 8),
+        )
+
+        # Normalize model strings
+        if "st7789" in model:
+            dev = dev_st7789(serial, width=width, height=height, rotate=rotation)
+        else:
+            # default to ssd1351 128x128
+            dev = dev_ssd1351(serial, rotate=luma_rot)
+
+        # Prefer real device-reported size if available
+        try:
+            width  = getattr(dev, "width", width)
+            height = getattr(dev, "height", height)
+        except Exception:
+            pass
+        return dev, width, height
     except Exception:
-        pass
-    return dev, width, height
+        return None, width, height
 
 
 class SmallDisplay:
