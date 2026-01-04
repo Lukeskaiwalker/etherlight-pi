@@ -612,7 +612,14 @@ def _git_blocking_changes():
         os.path.relpath(DEFAULT_CONFIG_PATH, BASE_DIR),
         os.path.relpath(LOCAL_CONFIG_PATH, BASE_DIR),
     }
-    return [p for p in _git_dirty_paths() if p not in ignore]
+    blocked = []
+    for p in _git_dirty_paths():
+        if p in ignore:
+            continue
+        if p.startswith('__pycache__/') or p.endswith('.pyc'):
+            continue
+        blocked.append(p)
+    return blocked
 
 def _stash_config_json():
     rel = os.path.relpath(DEFAULT_CONFIG_PATH, BASE_DIR)
