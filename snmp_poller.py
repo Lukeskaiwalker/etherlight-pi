@@ -142,63 +142,68 @@ class SnmpPoller(threading.Thread):
     async def _poll_once_async(self):
         eng = SnmpEngine()
         tgt = await UdpTransportTarget.create((self.host, 161))
-
-        ifnames_raw = await _walk(eng, tgt, self.community, OID_IFNAME)
-        speeds_raw  = await _walk(eng, tgt, self.community, OID_IFHSPEED)
-        opers_raw   = await _walk(eng, tgt, self.community, OID_IFOPER)
-
-        ifnames = {i: str(v) for i, v in ifnames_raw.items()}
-        speeds  = {i: int(v) for i, v in speeds_raw.items() if str(v).isdigit()}
-        opers   = {i: int(v) for i, v in opers_raw.items() if str(v).isdigit()}
-
-        # PVID / VLAN mapping
-        pvid_raw = await _walk(eng, tgt, self.community, OID_PVID)
-        pvid_by_base = {base: int(v) for base, v in pvid_raw.items() if str(v).isdigit()}
-        if not pvid_by_base:
-            vlan_untag_raw = await _walk(eng, tgt, self.community, OID_VLAN_CURR_UNTAG)
-            base_to_vlan = {}
-            for vlan_id, octs in vlan_untag_raw.items():
-                for base_port in _bitmap_ports_msb(_octets(octs)):
-                    base_to_vlan.setdefault(base_port, vlan_id)
-            pvid_by_base = base_to_vlan
-
-        # Choose physical ports (best effort)
-        candidates = sorted(ifnames.items(), key=lambda kv: kv[0])
-        phys = []
-        for ifIndex, name in candidates:
-            n = name.lower()
-            if any(s in n for s in ['eth', 'port', '/']) or n.isdigit():
-                phys.append(ifIndex)
-            if len(phys) >= self.port_count:
-                break
-        if len(phys) < self.port_count:
-            phys = [idx for idx, _ in candidates[:self.port_count]]
-
-        new_state: Dict[int, Dict[str, Any]] = {}
-        port = 1
-        for ifIndex in phys[:self.port_count]:
-            base = _portnum_from_ifname(ifnames.get(ifIndex, ""))
-            vlan = pvid_by_base.get(base) if base is not None else None
-            speed = speeds.get(ifIndex)
-            up = (opers.get(ifIndex) == 1)
-            new_state[port] = {
-                'vlan': vlan,
-                'speed': speed,
-                'up': up,
-                'ifIndex': ifIndex,
-                'ifName': ifnames.get(ifIndex, str(ifIndex))
-            }
-            port += 1
-
-        # Try to read switch temperature (non-fatal if it fails)
         try:
-            temp = await self._read_switch_temp(eng, tgt)
-        except Exception:
-            temp = None
+            ifnames_raw = await _walk(eng, tgt, self.community, OID_IFNAME)
+            speeds_raw  = await _walk(eng, tgt, self.community, OID_IFHSPEED)
+            opers_raw   = await _walk(eng, tgt, self.community, OID_IFOPER)
 
-        with self.state_lock:
-            self.state = new_state
-            self.switch_temp_c = temp
+            ifnames = {i: str(v) for i, v in ifnames_raw.items()}
+            speeds  = {i: int(v) for i, v in speeds_raw.items() if str(v).isdigit()}
+            opers   = {i: int(v) for i, v in opers_raw.items() if str(v).isdigit()}
+
+            # PVID / VLAN mapping
+            pvid_raw = await _walk(eng, tgt, self.community, OID_PVID)
+            pvid_by_base = {base: int(v) for base, v in pvid_raw.items() if str(v).isdigit()}
+            if not pvid_by_base:
+                vlan_untag_raw = await _walk(eng, tgt, self.community, OID_VLAN_CURR_UNTAG)
+                base_to_vlan = {}
+                for vlan_id, octs in vlan_untag_raw.items():
+                    for base_port in _bitmap_ports_msb(_octets(octs)):
+                        base_to_vlan.setdefault(base_port, vlan_id)
+                pvid_by_base = base_to_vlan
+
+            # Choose physical ports (best effort)
+            candidates = sorted(ifnames.items(), key=lambda kv: kv[0])
+            phys = []
+            for ifIndex, name in candidates:
+                n = name.lower()
+                if any(s in n for s in ['eth', 'port', '/']) or n.isdigit():
+                    phys.append(ifIndex)
+                if len(phys) >= self.port_count:
+                    break
+            if len(phys) < self.port_count:
+                phys = [idx for idx, _ in candidates[:self.port_count]]
+
+            new_state: Dict[int, Dict[str, Any]] = {}
+            port = 1
+            for ifIndex in phys[:self.port_count]:
+                base = _portnum_from_ifname(ifnames.get(ifIndex, ""))
+                vlan = pvid_by_base.get(base) if base is not None else None
+                speed = speeds.get(ifIndex)
+                up = (opers.get(ifIndex) == 1)
+                new_state[port] = {
+                    'vlan': vlan,
+                    'speed': speed,
+                    'up': up,
+                    'ifIndex': ifIndex,
+                    'ifName': ifnames.get(ifIndex, str(ifIndex))
+                }
+                port += 1
+
+            # Try to read switch temperature (non-fatal if it fails)
+            try:
+                temp = await self._read_switch_temp(eng, tgt)
+            except Exception:
+                temp = None
+
+            with self.state_lock:
+                self.state = new_state
+                self.switch_temp_c = temp
+        finally:
+            try:
+                eng.transportDispatcher.closeDispatcher()
+            except Exception:
+                pass
 
     def run(self):
         loop = asyncio.new_event_loop()
@@ -212,9 +217,9 @@ class SnmpPoller(threading.Thread):
         loop.close()
 
     async def detect_switch(self):
-            eng = SnmpEngine()
-            tgt = await UdpTransportTarget.create((self.host, 161))
-
+        eng = SnmpEngine()
+        tgt = await UdpTransportTarget.create((self.host, 161))
+        try:
             # sysDescr
             errInd, errStat, errIdx, varBinds = await get_cmd(
                 eng, CommunityData(self.community), tgt, ContextData(),
@@ -246,3 +251,8 @@ class SnmpPoller(threading.Thread):
                     port_numbers.append(n)
             guessed = max(port_numbers) if port_numbers else len(ifnames_raw)
             return model, guessed, sysname
+        finally:
+            try:
+                eng.transportDispatcher.closeDispatcher()
+            except Exception:
+                pass
