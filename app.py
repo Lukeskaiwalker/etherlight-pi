@@ -106,7 +106,7 @@ stop_event = threading.Event()
 runtime_lock = threading.Lock()
 runtime = {
     "identify_on": False,         # global identify toggle
-    "port_flash": {},             # {port: until_ts} for 3s white flash
+    "port_flash": {},             # {port: {"start": ts, "period": sec, "pulses": n}} pulse override
 }
 
 # Temps
@@ -212,13 +212,29 @@ def render_loop():
             vlan = s.get('vlan'); up = s.get('up', False); speed = s.get('speed')
 
             # Port-level 3s flash override?
-            flash_until = port_flash.get(port, 0.0)
-            if flash_until and now < flash_until:
-                # Solid bright white on both LEDs for this port
-                strip.set_port_led(port, 0, (255,255,255))
-                if leds_pp >= 2: strip.set_port_led(port, 1, (255,255,255))
-                continue
-            elif flash_until and now >= flash_until:
+            flash_cfg = port_flash.get(port)
+            if flash_cfg:
+                if isinstance(flash_cfg, dict):
+                    start = float(flash_cfg.get('start', now))
+                    period = max(0.15, float(flash_cfg.get('period', 0.6)))
+                    pulses = max(1, int(flash_cfg.get('pulses', 3)))
+                    elapsed = now - start
+                    total = pulses * period
+                    if elapsed < total:
+                        phase = (elapsed % period) / period
+                        f = 0.5 * (1.0 - math.cos(2 * math.pi * phase))
+                        rgb = _scale_rgb((255, 255, 255), f)
+                        strip.set_port_led(port, 0, rgb)
+                        if leds_pp >= 2:
+                            strip.set_port_led(port, 1, rgb)
+                        continue
+                else:
+                    flash_until = float(flash_cfg)
+                    if now < flash_until:
+                        # Solid bright white on both LEDs for this port
+                        strip.set_port_led(port, 0, (255,255,255))
+                        if leds_pp >= 2: strip.set_port_led(port, 1, (255,255,255))
+                        continue
                 # cleanup expired
                 with runtime_lock:
                     runtime["port_flash"].pop(port, None)
@@ -304,11 +320,24 @@ def api_identify():
 def api_port_blink():
     data = request.get_json(force=True)
     port = int(data.get('port', 1))
-    seconds = float(data.get('seconds', 3.0))
-    until = time.time() + max(0.2, seconds)
+    period_ms = float(data.get('period_ms', 600.0))
+    pulses = int(data.get('pulses', 3))
+    if 'seconds' in data and 'pulses' not in data and 'period_ms' not in data:
+        duration = max(0.2, float(data.get('seconds', 3.0)))
+        pulses = max(1, int(round(duration / max(0.15, period_ms / 1000.0))))
+    period = max(0.15, period_ms / 1000.0)
+    pulses = max(1, pulses)
+    start = time.time()
+    duration = pulses * period
     with runtime_lock:
-        runtime['port_flash'][port] = until
-    return jsonify({'ok': True, 'port': port, 'until': until})
+        runtime['port_flash'][port] = {'start': start, 'period': period, 'pulses': pulses}
+    return jsonify({
+        'ok': True,
+        'port': port,
+        'duration_ms': int(duration * 1000),
+        'pulses': pulses,
+        'period_ms': int(period * 1000),
+    })
 
 # Auto-detect switch
 # --- Detect switch -----------------------------------------------------------
