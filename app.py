@@ -585,9 +585,16 @@ def _run_cmd(cmd, cwd=None):
     res = subprocess.run(cmd, cwd=cwd, check=True, text=True, capture_output=True)
     return res.stdout.strip()
 
+def _git_cmd(args):
+    cmd = ['git']
+    if os.geteuid() == 0:
+        cmd += ['-c', f'safe.directory={BASE_DIR}']
+    cmd += list(args)
+    return cmd
+
 def _git_dirty_paths():
     try:
-        out = _run_cmd(['git', 'status', '--porcelain'], cwd=BASE_DIR)
+        out = _run_cmd(_git_cmd(['status', '--porcelain']), cwd=BASE_DIR)
     except Exception:
         return []
     paths = []
@@ -610,9 +617,9 @@ def _git_blocking_changes():
 def _stash_config_json():
     rel = os.path.relpath(DEFAULT_CONFIG_PATH, BASE_DIR)
     try:
-        out = _run_cmd(['git', 'status', '--porcelain', '--', rel], cwd=BASE_DIR)
+        out = _run_cmd(_git_cmd(['status', '--porcelain', '--', rel]), cwd=BASE_DIR)
         if out.strip():
-            _run_cmd(['git', 'stash', 'push', '-m', 'etherlight-config', '--', rel], cwd=BASE_DIR)
+            _run_cmd(_git_cmd(['stash', 'push', '-m', 'etherlight-config', '--', rel]), cwd=BASE_DIR)
             return True
     except Exception:
         pass
@@ -733,8 +740,8 @@ def _run_git_update(full_install=False):
         if blocking:
             raise RuntimeError('Local changes detected: ' + ', '.join(blocking))
         stashed = _stash_config_json()
-        _run_cmd(['git', 'fetch', '--tags', 'origin'], cwd=BASE_DIR)
-        _run_cmd(['git', 'pull', '--ff-only'], cwd=BASE_DIR)
+        _run_cmd(_git_cmd(['fetch', '--tags', 'origin']), cwd=BASE_DIR)
+        _run_cmd(_git_cmd(['pull', '--ff-only']), cwd=BASE_DIR)
         if full_install:
             _run_cmd(['bash', os.path.join(BASE_DIR, 'install.sh')], cwd=BASE_DIR)
         else:
